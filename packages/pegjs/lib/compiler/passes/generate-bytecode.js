@@ -149,6 +149,34 @@ const util = require( "../../util" );
 //
 //        expect(expectations[e]);
 //
+// [42] MATCH_ANY_CHARACTER a, f, ...
+//
+//        if (input.length > currPos && (input.charCodeAt(currPos) & 0xFC00) !== 0xDC00 && ((input.charCodeAt(currPos) & 0xFC00) !== 0xD800 || (input.length > currPos+1 && (input.charCodeAt(currPos+1) & 0xFC00) === 0xDC00))) {
+//          interpret(ip + 3, ip + 3 + a);
+//        } else {
+//          interpret(ip + 3 + a, ip + 3 + a + f);
+//        }
+//
+// [43] ACCEPT_CHARACTER
+//
+//        if ((input.charCodeAt(currPos) & 0xFC00) === 0xD800) {
+//          stack.push(input.substr(currPos, 2));
+//          currPos += 2;
+//        } else {
+//          stack.top() = input.charAt(currPos);
+//          currPos += 1;
+//        }
+//        
+// [44] ACCEPT_LONE_CHARACTER
+//
+//        if ((input.charCodeAt(currPos) & 0xFC00) === 0xD800 && input.length > currPos + 1 && (input.charCodeAt(currPos+1) & 0xFC00) === 0xDC00) {
+//          stack.push(input.substr(currPos, 2));
+//          currPos += 2;
+//        } else {
+//          stack.top() = input.charAt(currPos);
+//          currPos += 1;
+//        }
+//        
 // Calls
 // -----
 //
@@ -197,7 +225,7 @@ const util = require( "../../util" );
 //          }
 //          expected.top().variants.pushAll(value.variants);
 //        }
-function generateBytecode( ast, session ) {
+function generateBytecode( ast, session, options ) {
 
     const op = session.opcodes;
 
@@ -218,6 +246,7 @@ function generateBytecode( ast, session ) {
 
         const cls = {
             value: node.parts,
+            regexp: node.regexp,
             inverted: node.inverted,
             ignoreCase: node.ignoreCase,
         };
@@ -706,6 +735,7 @@ function generateBytecode( ast, session ) {
         class( node, context ) {
 
             const match = node.match|0;
+            const codeUnits = node.codeUnits;
             const classIndex = match === 0 ? addClassConst( node ) : null;
             // Do not generate unused constant, if no need it
             const expectedIndex = context.reportFailures ? addExpectedConst( {
@@ -715,12 +745,18 @@ function generateBytecode( ast, session ) {
                 ignoreCase: node.ignoreCase,
             } ) : null;
 
+            const opcodeAccept = typeof codeUnits === "number"
+                ? [ op.ACCEPT_N, codeUnits ]
+                : options.unicode === "lone-surrogates"
+                    ? [ op.ACCEPT_LONE_CHARACTER ]
+                    : [ op.ACCEPT_CHARACTER ];
+
             return buildSequence(
                 context.reportFailures ? [ op.EXPECT, expectedIndex ] : [],
                 buildCondition(
                     match,
                     [ op.MATCH_CLASS, classIndex ],
-                    [ op.ACCEPT_N, 1 ],
+                    opcodeAccept,
                     [ op.PUSH_FAILED ],
                 ),
             );
@@ -734,12 +770,22 @@ function generateBytecode( ast, session ) {
                 ? addExpectedConst( { type: "any" } )
                 : null;
 
+            const opcodeMatch = options.unicode === true
+                ? [ op.MATCH_ANY_CHARACTER ]
+                : [ op.MATCH_ANY ];
+
+            const opcodeAccept = options.unicode
+                ? options.unicode === "lone-surrogates"
+                    ? [ op.ACCEPT_LONE_CHARACTER ]
+                    : [ op.ACCEPT_CHARACTER ]
+                : [ op.ACCEPT_N, 1 ];
+
             return buildSequence(
                 context.reportFailures ? [ op.EXPECT, expectedIndex ] : [],
                 buildCondition(
                     node.match|0,
-                    [ op.MATCH_ANY ],
-                    [ op.ACCEPT_N, 1 ],
+                    opcodeMatch,
+                    opcodeAccept,
                     [ op.PUSH_FAILED ],
                 ),
             );

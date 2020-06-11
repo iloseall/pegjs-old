@@ -36,6 +36,9 @@ const opcodes = {
     ACCEPT_N:          21,   // ACCEPT_N n
     ACCEPT_STRING:     22,   // ACCEPT_STRING s
     EXPECT:            23,   // EXPECT e
+    MATCH_ANY_CHARACTER:   42, // MATCH_ANY_CHARACTER a, f, ...
+    ACCEPT_CHARACTER:      43, // ACCEPT_CHARACTER
+    ACCEPT_LONE_CHARACTER: 44, // ACCEPT_LONE_CHARACTER
 
     // Calls
 
