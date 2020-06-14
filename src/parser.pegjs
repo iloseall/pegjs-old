@@ -358,10 +358,6 @@ CharacterPart
 ClassCharacterRange
   = begin:ClassCharacter "-" end:ClassCharacter {
 
-        if ( begin.charCodeAt( 0 ) > end.charCodeAt( 0 ) )
-
-            error( "Invalid character range: " + text() + "." );
-
         return [ begin, end ];
 
     }

@@ -495,8 +495,8 @@ function generateJS( ast, session, options ) {
             "        case " + op.MATCH_ANY + ":",          // MATCH_ANY a, f, ...
             indent10( generateCondition( "input.length > peg$currPos", 0 ) ),
             "",
-            "        case " + op.MATCH_ANY_CHARACTER + ":",          // MATCH_ANY_CHARACTER a, f, ...
-            indent10( generateCondition( "input.length > peg$currPos && (input.charCodeAt(peg$currPos) & 0xFC00) !== 0xDC00 && ((input.charCodeAt(peg$currPos) & 0xFC00) !== 0xD800 || (input.length > peg$currPos+1 && (input.charCodeAt(peg$currPos+1) & 0xFC00) === 0xDC00))", 0 ) ),
+            "        case " + op.MATCH_ASTRAL + ":",       // MATCH_ASTRAL a, f, ...
+            indent10( generateCondition( "(input.charCodeAt(peg$currPos) & 0xFC00) === 0xD800 && input.length > peg$currPos + 1 && (input.charCodeAt(peg$currPos+1) & 0xFC00) === 0xDC00", 0 ) ),
             "",
             "        case " + op.MATCH_STRING + ":",       // MATCH_STRING s, a, f, ...
             indent10( generateCondition(
@@ -511,6 +511,12 @@ function generateJS( ast, session, options ) {
             ) ),
             "",
             "        case " + op.MATCH_CLASS + ":",        // MATCH_CLASS c, a, f, ...
+            indent10( generateCondition(
+                "peg$regexps[bc[ip + 1]].test(input.charAt(peg$currPos))",
+                1,
+            ) ),
+            "",
+            "        case " + op.MATCH_CLASS2 + ":",       // MATCH_CLASS2 c, a, f, ...
             indent10( generateCondition(
                 "peg$regexps[bc[ip + 1]].test(input.substring(peg$currPos, peg$currPos+2))",
                 1,
@@ -531,28 +537,6 @@ function generateJS( ast, session, options ) {
             "        case " + op.EXPECT + ":",             // EXPECT e
             "          rule$expects(peg$expectations[bc[ip + 1]]);",
             "          ip += 2;",
-            "          break;",
-            "",
-            "        case " + op.ACCEPT_CHARACTER + ":",      // ACCEPT_CHARACTER
-            "          if ((input.charCodeAt(peg$currPos) & 0xFC00) === 0xD800) {",
-            "            stack.push(input.substr(peg$currPos, 2));",
-            "            peg$currPos += 2;",
-            "          } else {",
-            "            stack.push(input.charAt(peg$currPos));",
-            "            peg$currPos++;",
-            "          }",
-            "          ip++;",
-            "          break;",
-            "",
-            "        case " + op.ACCEPT_LONE_CHARACTER + ":",      // ACCEPT_LONE_CHARACTER
-            "          if ((input.charCodeAt(peg$currPos) & 0xFC00) === 0xD800 && input.length > peg$currPos + 1 && (input.charCodeAt(peg$currPos+1) & 0xFC00) === 0xDC00) {",
-            "            stack.push(input.substr(peg$currPos, 2));",
-            "            peg$currPos += 2;",
-            "          } else {",
-            "            stack.push(input.charAt(peg$currPos));",
-            "            peg$currPos++;",
-            "          }",
-            "          ip++;",
             "          break;",
             "",
             "        case " + op.LOAD_SAVED_POS + ":",     // LOAD_SAVED_POS p
@@ -888,8 +872,8 @@ function generateJS( ast, session, options ) {
                         compileCondition( "input.length > peg$currPos", 0 );
                         break;
 
-                    case op.MATCH_ANY_CHARACTER: // MATCH_ANY_CHARACTER a, f, ...
-                        compileCondition( "input.length > peg$currPos && (input.charCodeAt(peg$currPos) & 0xFC00) !== 0xDC00 && ((input.charCodeAt(peg$currPos) & 0xFC00) !== 0xD800 || (input.length > peg$currPos+1 && (input.charCodeAt(peg$currPos+1) & 0xFC00) === 0xDC00))", 0 );
+                    case op.MATCH_ASTRAL:       // MATCH_ASTRAL a, f, ...
+                        compileCondition( "(input.charCodeAt(peg$currPos) & 0xFC00) === 0xD800 && input.length > peg$currPos + 1 && (input.charCodeAt(peg$currPos+1) & 0xFC00) === 0xDC00", 0 );
                         break;
 
                     case op.MATCH_STRING:       // MATCH_STRING s, a, f, ...
@@ -916,6 +900,10 @@ function generateJS( ast, session, options ) {
                         break;
 
                     case op.MATCH_CLASS:        // MATCH_CLASS c, a, f, ...
+                        compileCondition( r( bc[ ip + 1 ] ) + ".test(input.charAt(peg$currPos))", 1 );
+                        break;
+
+                    case op.MATCH_CLASS2:       // MATCH_CLASS2 c, a, f, ...
                         compileCondition( r( bc[ ip + 1 ] ) + ".test(input.substring(peg$currPos, peg$currPos+2))", 1 );
                         break;
 
@@ -946,28 +934,6 @@ function generateJS( ast, session, options ) {
                     case op.EXPECT:             // EXPECT e
                         parts.push( "rule$expects(" + e( bc[ ip + 1 ] ) + ");" );
                         ip += 2;
-                        break;
-
-                    case op.ACCEPT_CHARACTER:   // ACCEPT_CHARACTER
-                        parts.push( "if ((input.charCodeAt(peg$currPos) & 0xFC00) === 0xD800) {" );
-                        parts.push( indent2( stack.push( "input.substr(peg$currPos, 2)" ) ) );
-                        parts.push( indent2( "peg$currPos += 2;" ) );
-                        parts.push( "} else {" );
-                        parts.push( indent2( stack.top() + " = input.charAt(peg$currPos);" ) );
-                        parts.push( indent2( "peg$currPos++;" ) );
-                        parts.push( "}" );
-                        ip++;
-                        break;
-
-                    case op.ACCEPT_LONE_CHARACTER: // ACCEPT_LONE_CHARACTER
-                        parts.push( "if ((input.charCodeAt(peg$currPos) & 0xFC00) === 0xD800 && input.length > peg$currPos + 1 && (input.charCodeAt(peg$currPos+1) & 0xFC00) === 0xDC00) {" );
-                        parts.push( indent2( stack.push( "input.substr(peg$currPos, 2)" ) ) );
-                        parts.push( indent2( "peg$currPos += 2;" ) );
-                        parts.push( "} else {" );
-                        parts.push( indent2( stack.top() + " = input.charAt(peg$currPos);" ) );
-                        parts.push( indent2( "peg$currPos++;" ) );
-                        parts.push( "}" );
-                        ip++;
                         break;
 
                     case op.LOAD_SAVED_POS:     // LOAD_SAVED_POS p
@@ -1597,9 +1563,16 @@ function generateJS( ast, session, options ) {
             "",
             "    return peg$buildStructuredError(",
             "      expected.variants,",
-            "      failPos < input.length ? ((input.charCodeAt(failPos) & 0xFC00) === 0xD800 && failPos+1 < input.length ? input.substring(failPos, failPos+2) : input.charAt(failPos) ) : null,",
+            // TODO This relates to "output Unicode" - see prepare-unicode-classes.js
+            ( options.unicode ?
+            "      failPos < input.length ? ((input.charCodeAt(failPos) & 0xFC00) === 0xD800 && failPos+1 < input.length ? input.substring(failPos, failPos+2) : input.charAt(failPos) ) : null," :
+            "      failPos < input.length ? input.charAt(failPos) : null,"
+            ),
             "      failPos < input.length",
-            "        ? (failPos+1 < input.length && (input.charCodeAt(failPos) & 0xFC00) === 0xD800 ? peg$computeLocation(failPos, failPos+2) : peg$computeLocation(failPos, failPos + 1) )",
+            ( options.unicode ?
+            "        ? (failPos+1 < input.length && (input.charCodeAt(failPos) & 0xFC00) === 0xD800 ? peg$computeLocation(failPos, failPos+2) : peg$computeLocation(failPos, failPos + 1) )" :
+            "        ? peg$computeLocation(failPos, failPos + 1)"
+            ),
             "        : peg$computeLocation(failPos, failPos)",
             "    );",
             "  }",

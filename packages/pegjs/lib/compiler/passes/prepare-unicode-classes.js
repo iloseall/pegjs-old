@@ -2,11 +2,11 @@
 
 const regenerate = require( "regenerate" );
 
-// node.codeUnits is a static analysis of the number of UTF-16 code units associated to each class. Can be:
-//    1: the class is statically determined as 1 code unit (BMP or lone surrogates) 
-//    2: the class is statically determined as 2 code units (all astral code points)
-//    "dynamic": the class is statically determined as 1 or 2 code units depending on the parsed text during execution
-// node.regepx is the regular expression associated to the class.
+const bmp = regenerate().addRange( 0x0000, 0xFFFF );
+const highSurrogates = regenerate().addRange( 0xD800, 0xDBFF );
+const astral = regenerate().addRange( 0x10000, 0x10FFFF );
+
+// node.regepxBMP and node.regexpAstral are the regular expressions associated to the class, splitted across BMP and astral planes.
 function prepareUnicodeClasses( ast, session, options ) {
 
     session.buildVisitor( {
@@ -14,50 +14,101 @@ function prepareUnicodeClasses( ast, session, options ) {
 
             if ( node.parts.length === 0 ) {
 
-                node.codeUnits = 1;
-                node.regexp = "[]";
+                node.regexpBMP = null;
+                node.regexpAstral = null;
                 return;
 
             }
 
-            let minCodeUnits = 2;
-            let maxCodeUnits = 1;
-            let highSurrogate = false;
-            let lowSurrogate = false;
-            let bmp = false;
-            let astral = false;
-            let regexp = regenerate();
+            // TODO Should we add another distinct option to dissociate "input Unicode" from "output Unicode": "input Unicode" would be
+            // the possibility to enter Unicode characters in characters classes (probably the only location where this is an issue)
+            // and "output Unicode" is the fact that the rules 'dot' and 'inverted characters classes' increase the cursor of either 1
+            // code unit (non-Unicode/classic mode) or 1 Unicode character (1 or 2 code units depending on the actual text)
+            // This bloc relates to "input Unicode"
+            if( options.unicode ) {
 
-            function minmax( part ) {
+                for ( let i = 0; i < node.parts.length; i++ ) {
 
-                const code = part.charCodeAt( 0 );
+                    const part = node.parts[ i ];
 
-                if ( part.length === 1 ) {
+                    if ( Array.isArray( part ) ) {
 
-                    minCodeUnits = 1;
+                        if ( ( part[ 1 ].charCodeAt( 0 ) & 0xFC00 ) === 0xD800 && part[ 1 ].length === 1 && i+1 < node.parts.length ) {
 
-                    if ( ( code & 0xFC00 ) === 0xD800 ) {
+                            const nextPart = node.parts[ i+1 ];
 
-                        highSurrogate = true;
+                            if ( Array.isArray( nextPart ) ) {
 
-                    } else if ( ( code & 0xFC00 ) === 0xDC00 ) {
+                                if ( ( nextPart[ 0 ].charCodeAt( 0 ) & 0xFC00 ) === 0xDC00 ) {
 
-                        lowSurrogate = true;
+                                    node.parts[ i ][ 1 ] += nextPart[ 0 ];
+
+                                    // This looks strange but it is the behaviour of V8
+                                    node.parts.splice( i+1, 1, "-", nextPart[ 1 ] );
+                                    i++;
+
+                                }
+
+                            } else if ( ( nextPart.charCodeAt( 0 ) & 0xFC00 ) === 0xDC00 ) {
+
+                                node.parts[ i ][ 1 ] += node.parts.splice( i+1, 1 )[ 0 ];
+
+                            }
+
+                        }
 
                     } else {
 
-                        bmp = true;
+                        if ( ( part.charCodeAt( 0 ) & 0xFC00 ) === 0xD800 && part.length === 1 && i+1 < node.parts.length ) {
+
+                            const nextPart = node.parts[ i+1 ];
+
+                            if ( Array.isArray( nextPart ) ) {
+
+                                if ( ( nextPart[ 0 ].charCodeAt( 0 ) & 0xFC00 ) === 0xDC00 ) {
+
+                                    node.parts[ i+1 ][0] = part + nextPart[ 0 ];
+                                    node.parts.splice( i, 1 );
+                                    i--;
+
+                                }
+
+                            } else if ( ( nextPart.charCodeAt( 0 ) & 0xFC00 ) === 0xDC00 ) {
+
+                                node.parts[ i ] += nextPart;
+                                node.parts.splice( i+1, 1 );
+
+                            }
+
+                        }
 
                     }
 
-                } else {
+                }
 
-                    maxCodeUnits = 2;
-                    astral = true;
+            } else {
+
+                // TODO this is to forbid the use of \u{hhhhhh} in characters classes in non-Unicode mode
+                // This bloc relates to "input Unicode"
+                for ( let i = 0; i < node.parts.length; i++ ) {
+
+                    const part = node.parts[ i ];
+
+                    if ( Array.isArray( part ) ) {
+
+                        if ( part[ 0 ].length === 2 || part[ 1 ].length === 2 ) session.error( "Invalid character in non-Unicode grammar: " + part[ 0 ] + "-" + part[ 1 ] + "." );
+
+                    } else {
+
+                        if ( part.length === 2 ) session.error( "Invalid character in non-Unicode grammar: " + part + "." );
+
+                    }
 
                 }
 
             }
+
+            let regexp = regenerate();
 
             for ( let i = 0; i < node.parts.length; i++ ) {
 
@@ -65,95 +116,71 @@ function prepareUnicodeClasses( ast, session, options ) {
 
                 if ( Array.isArray( part ) ) {
 
-                    minmax( part[ 0 ] );
-                    minmax( part[ 1 ] );
+                    if ( part[ 0 ].length > part[ 1 ].length ) {
+
+                        session.error( "Invalid character range: " + part[ 0 ] + "-" + part[ 1 ] + "." );
+
+                    } else if( part[ 0 ].length === part[ 1 ].length ) {
+
+                        if ( part[ 0 ].charCodeAt( 0 ) > part[ 1 ].charCodeAt( 0 ) ) {
+
+                            session.error( "Invalid character range: " + part[ 0 ] + "-" + part[ 1 ] + "." );
+
+                        } else if ( part[ 0 ].length === 2 && part[ 0 ].charCodeAt( 1 ) > part[ 1 ].charCodeAt( 1 ) ) {
+
+                            session.error( "Invalid character range: " + part[ 0 ] + "-" + part[ 1 ] + "." );
+
+                        }
+
+                    }
+
                     regexp.addRange( part[ 0 ], part[ 1 ] );
 
                 } else {
 
-                    minmax( part );
                     regexp.add( part );
 
                 }
 
             }
 
-            if ( maxCodeUnits === 2 && ! options.unicode ) {
+            function regexpToString( regexp, entireRange ) {
 
-                session.error(
-                    `Unicode characters above the BMP cannot be used in classes when options.unicode is false.`,
-                    node.location,
-                );
+                regexp = regexp.toString( { bmpOnly: true } );
 
-            }
+                if ( regexp === "[]" ) {
 
-            if ( highSurrogate || lowSurrogate ) {
+                    return null;
 
-                if ( bmp || astral ) {
+                } else if ( regexp === entireRange && ! node.ignoreCase ) {
 
-                    session.error(
-                        `UTF-16 surrogates cannot be used together with well-formed Unicode characters in the same class.`,
-                        node.location,
-                    );
-
-                }
-
-                if ( highSurrogate && lowSurrogate ) {
-
-                    session.error(
-                        `UTF-16 high surrogates cannot be used together with low surrogates in the same class.`,
-                        node.location,
-                    );
-
-                }
-
-                if ( options.unicode === true ) {
-
-                    session.error(
-                        `UTF-16 surrogates cannot be used when options.unicode is true, meaning well-formed Unicode characters only.`,
-                        node.location,
-                    );
-
-                }
-
-                if ( node.inverted || node.ignoreCase ) {
-
-                    session.error(
-                        `UTF-16 surrogages cannot be used in an inverted class or in a class with the ignoreCase flag.`,
-                        node.location,
-                    );
-
-                }
-
-            }
-
-            if ( node.inverted ) {
-
-                if ( options.unicode ) {
-
-                    regexp = regenerate().addRange( 0, 0x10FFFF ).remove( regexp );
-                    maxCodeUnits = 2;
+                    return true;
 
                 } else {
 
-                    regexp = regenerate().addRange( 0, 0xFFFF ).remove( regexp );
+                    const p = ( /\|\[/ ).test( regexp );
+                    return "/^" + ( p ? "(?:" : "" ) + regexp + ( p ? ")" : "" ) + "/" + ( node.ignoreCase ? "i" : "" );
 
                 }
 
             }
 
-            regexp = regexp.toString()
-                .replace( "|[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])", "" )
-                .replace( "|(?:[^\\uD800-\\uDBFF]|^)[\\uDC00-\\uDFFF]", "" );
-            const multipleClasses = ( /\|\[/ ).test( regexp );
+            node.regexp1 = regexpToString( bmp.clone().intersection( regexp ), "[\\0-\\uFFFF]" );
+            node.regexp2 = regexpToString( astral.clone().intersection( regexp ), "[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]" );
+            node.regexpD8 = regexpToString( highSurrogates.clone().intersection( regexp ), "[\\uD800-\\uDBFF]" );
 
-            node.codeUnits = minCodeUnits === maxCodeUnits ? minCodeUnits : "dynamic";
-            node.regexp = "/^"
-                + ( multipleClasses ? "(?:" : "" )
-                + regexp
-                + ( multipleClasses ? ")" : "" )
-                + "/"
-                + ( node.ignoreCase ? "i" : "" );
+            // TODO currently never triggered because of the 'options.unicode' above - could be activated if we dissociate
+            // "input Unicode" from "output Unicode"
+            // This relates to "input Unicode"
+            if ( node.regexp2 && ! options.unicode ) {
+
+                session.warn(
+                    "Character class [" +
+                    node.parts.map( function ( x ) { if ( Array.isArray( x ) ) return x[0] + "-" + x[1]; else return x; } ).join( "," ) +
+                    "] contains Unicode characters outside of BMP: these will never matched; you should set options.unicode to true.",
+                );
+
+            }
 
         },
     } )( ast );
