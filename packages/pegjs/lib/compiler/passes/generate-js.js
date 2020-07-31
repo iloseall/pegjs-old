@@ -50,21 +50,7 @@ function generateJS( ast, session, options ) {
 
         function buildRegexp( cls ) {
 
-            return "/^["
-                + ( cls.inverted ? "^" : "" )
-                + cls.value
-                    .map( part => (
-
-                        Array.isArray( part )
-                            ? util.regexpEscape( part[ 0 ] )
-                                + "-"
-                                + util.regexpEscape( part[ 1 ] )
-                            : util.regexpEscape( part )
-
-                    ) )
-                    .join( "" )
-                + "]/"
-                + ( cls.ignoreCase ? "i" : "" );
+            return cls.regexp;
 
         }
 
@@ -509,6 +495,9 @@ function generateJS( ast, session, options ) {
             "        case " + op.MATCH_ANY + ":",          // MATCH_ANY a, f, ...
             indent10( generateCondition( "input.length > peg$currPos", 0 ) ),
             "",
+            "        case " + op.MATCH_ASTRAL + ":",       // MATCH_ASTRAL a, f, ...
+            indent10( generateCondition( "(input.charCodeAt(peg$currPos) & 0xFC00) === 0xD800 && input.length > peg$currPos + 1 && (input.charCodeAt(peg$currPos+1) & 0xFC00) === 0xDC00", 0 ) ),
+            "",
             "        case " + op.MATCH_STRING + ":",       // MATCH_STRING s, a, f, ...
             indent10( generateCondition(
                 "input.substr(peg$currPos, peg$literals[bc[ip + 1]].length) === peg$literals[bc[ip + 1]]",
@@ -524,6 +513,12 @@ function generateJS( ast, session, options ) {
             "        case " + op.MATCH_CLASS + ":",        // MATCH_CLASS c, a, f, ...
             indent10( generateCondition(
                 "peg$regexps[bc[ip + 1]].test(input.charAt(peg$currPos))",
+                1,
+            ) ),
+            "",
+            "        case " + op.MATCH_CLASS2 + ":",       // MATCH_CLASS2 c, a, f, ...
+            indent10( generateCondition(
+                "peg$regexps[bc[ip + 1]].test(input.substring(peg$currPos, peg$currPos+2))",
                 1,
             ) ),
             "",
@@ -877,6 +872,10 @@ function generateJS( ast, session, options ) {
                         compileCondition( "input.length > peg$currPos", 0 );
                         break;
 
+                    case op.MATCH_ASTRAL:       // MATCH_ASTRAL a, f, ...
+                        compileCondition( "(input.charCodeAt(peg$currPos) & 0xFC00) === 0xD800 && input.length > peg$currPos + 1 && (input.charCodeAt(peg$currPos+1) & 0xFC00) === 0xDC00", 0 );
+                        break;
+
                     case op.MATCH_STRING:       // MATCH_STRING s, a, f, ...
                         compileCondition(
                             ast.literals[ bc[ ip + 1 ] ].length > 1
@@ -902,6 +901,10 @@ function generateJS( ast, session, options ) {
 
                     case op.MATCH_CLASS:        // MATCH_CLASS c, a, f, ...
                         compileCondition( r( bc[ ip + 1 ] ) + ".test(input.charAt(peg$currPos))", 1 );
+                        break;
+
+                    case op.MATCH_CLASS2:       // MATCH_CLASS2 c, a, f, ...
+                        compileCondition( r( bc[ ip + 1 ] ) + ".test(input.substring(peg$currPos, peg$currPos+2))", 1 );
                         break;
 
                     case op.ACCEPT_N:           // ACCEPT_N n
@@ -1560,9 +1563,16 @@ function generateJS( ast, session, options ) {
             "",
             "    return peg$buildStructuredError(",
             "      expected.variants,",
-            "      failPos < input.length ? input.charAt(failPos) : null,",
+            // TODO This relates to "output Unicode" - see prepare-unicode-classes.js
+            ( options.unicode ?
+            "      failPos < input.length ? ((input.charCodeAt(failPos) & 0xFC00) === 0xD800 && failPos+1 < input.length ? input.substring(failPos, failPos+2) : input.charAt(failPos) ) : null," :
+            "      failPos < input.length ? input.charAt(failPos) : null,"
+            ),
             "      failPos < input.length",
-            "        ? peg$computeLocation(failPos, failPos + 1)",
+            ( options.unicode ?
+            "        ? (failPos+1 < input.length && (input.charCodeAt(failPos) & 0xFC00) === 0xD800 ? peg$computeLocation(failPos, failPos+2) : peg$computeLocation(failPos, failPos + 1) )" :
+            "        ? peg$computeLocation(failPos, failPos + 1)"
+            ),
             "        : peg$computeLocation(failPos, failPos)",
             "    );",
             "  }",

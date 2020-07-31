@@ -395,6 +395,16 @@ describe( "generated parser behavior", function () {
 
                 } );
 
+                it( "matches Unicode characters when options.unicode is true", function () {
+
+                    const parser = peg.generate( "start = [\u{1F4AF}]", Object.assign( { unicode: true }, options ) );
+
+                    expect( parser ).to.parse( "💯" );
+                    expect( parser ).to.parse( "\uD83D\uDCAF" );
+                    expect( parser ).to.failToParse( "\uDCAF\uD83D" );
+
+                } );
+
             } );
 
             describe( "when it matches", function () {

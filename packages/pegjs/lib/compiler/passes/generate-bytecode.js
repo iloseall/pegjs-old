@@ -111,6 +111,14 @@ const util = require( "../../util" );
 //          interpret(ip + 3 + a, ip + 3 + a + f);
 //        }
 //
+// [42] MATCH_ASTRAL a, f, ...
+//
+//        if ((input.charCodeAt(currPos) & 0xFC00) === 0xD800 && input.length > currPos + 1 && (input.charCodeAt(currPos+1) & 0xFC00) === 0xDC00) {
+//          interpret(ip + 3, ip + 3 + a);
+//        } else {
+//          interpret(ip + 3 + a, ip + 3 + a + f);
+//        }
+//
 // [18] MATCH_STRING s, a, f, ...
 //
 //        if (input.substr(currPos, literals[s].length) === literals[s]) {
@@ -130,6 +138,15 @@ const util = require( "../../util" );
 // [20] MATCH_CLASS c, a, f, ...
 //
 //        if (classes[c].test(input.charAt(currPos))) {
+//          interpret(ip + 4, ip + 4 + a);
+//        } else {
+//          interpret(ip + 4 + a, ip + 4 + a + f);
+//        }
+//
+//
+// [43] MATCH_CLASS2 c, a, f, ...
+//
+//        if (classes[c].test(input.substring(currPos, currPos+2))) {
 //          interpret(ip + 4, ip + 4 + a);
 //        } else {
 //          interpret(ip + 4 + a, ip + 4 + a + f);
@@ -197,7 +214,7 @@ const util = require( "../../util" );
 //          }
 //          expected.top().variants.pushAll(value.variants);
 //        }
-function generateBytecode( ast, session ) {
+function generateBytecode( ast, session, options ) {
 
     const op = session.opcodes;
 
@@ -214,15 +231,16 @@ function generateBytecode( ast, session ) {
 
     }
 
-    function addClassConst( node ) {
+    function addClassConst( node, regexp ) {
 
         const cls = {
             value: node.parts,
+            regexp: regexp,
             inverted: node.inverted,
             ignoreCase: node.ignoreCase,
         };
-        const pattern = JSON.stringify( cls );
-        const index = util.findIndex( classes, c => JSON.stringify( c ) === pattern );
+        const pattern = JSON.stringify( cls.regexp );
+        const index = util.findIndex( classes, c => JSON.stringify( c.regexp ) === pattern );
         return index === -1 ? classes.push( cls ) - 1 : index;
 
     }
@@ -706,22 +724,70 @@ function generateBytecode( ast, session ) {
         class( node, context ) {
 
             const match = node.match|0;
-            const classIndex = match === 0 ? addClassConst( node ) : null;
+            const match1 = node.regexp1 === null ? -1 : ( node.regexp1 === true ? 1 : match );
+            const match2 = node.regexp2 === null ? -1 : ( node.regexp2 === true ? 1 : match );
+            const matchD8 = node.regexp2 === null ? -1 : ( node.regexpD8 === true ? 1 : match );
+            const classIndex1 = match1 === 0 ? addClassConst( node, node.regexp1 ) : null;
+            const classIndex2 = match2 === 0 ? addClassConst( node, node.regexp2 ) : null;
+            const inverted = node.inverted;
+
             // Do not generate unused constant, if no need it
             const expectedIndex = context.reportFailures ? addExpectedConst( {
                 type: "class",
                 value: node.parts,
-                inverted: node.inverted,
+                inverted: inverted,
                 ignoreCase: node.ignoreCase,
             } ) : null;
 
+            // We know here we are on a one-code-unit character
+            const opcode1 = buildCondition(
+                match1,
+                [ op.MATCH_CLASS, classIndex1 ],
+                inverted ? [ op.PUSH_FAILED ] : [ op.ACCEPT_N, 1 ],
+                inverted ? [ op.ACCEPT_N, 1 ] : [ op.PUSH_FAILED ],
+            );
+
+            // Small optimisation to trigger matchD8 in the case we are in BMP mode, on a D8 followed by a DC
+            // but the 2-code-units did not match, so we try with the 1-code-unit regexp1 with the knowledge
+            // we are specifically on a D8 - it is not worth creating a runtime-specific regexpD8 compared to the
+            // existing regexp1 (which includes the range D8).
+            const opcodeD8 = buildCondition(
+                matchD8,
+                [ op.MATCH_CLASS, classIndex1 ],
+                inverted ? [ op.PUSH_FAILED ] : [ op.ACCEPT_N, 1 ],
+                inverted ? [ op.ACCEPT_N, 1 ] : [ op.PUSH_FAILED ],
+            );
+
+            // TODO This relates to "output Unicode" - see prepare-unicode-classes.js
+            const opcode2FailedInverted = options.unicode ? [ op.ACCEPT_N, 2 ] : opcodeD8;
+            const opcode2Failed = options.unicode ? [ op.PUSH_FAILED ] : opcodeD8;
+
+            // We know here we are on a two-code-units character (D8 followed by DC).
+            // In Unicode mode we always increment the cursor of 2 code units because we are on a non-BMP character
+            //   even when we match an inverted class (=we did not find any non-BMP described in the regexp)
+            // In BMP mode we increment the cursor of 2 code units when we find the 2-code-units character, but
+            //   we fallback to the 1-code-unit character regexp1 (with the optimisation the first code unit is D8)
+            //   where we can only increment the cursor of 1 code unit (whether we match a positive or inverted class)
+            const opcode2 = buildCondition(
+                match2,
+                [ op.MATCH_CLASS2, classIndex2 ],
+                inverted ? [ op.PUSH_FAILED ] : [ op.ACCEPT_N, 2 ],
+                inverted ? opcode2FailedInverted : opcode2Failed,
+            );
+
+            // This main condition first determines if we are possibly in a 2-code-units Unicode character or a
+            // 1-code-unit Unicode character.
+            // In Unicode mode we always enter in this condition
+            // In BMP mode we enter in this condition only if there is a 2-code-units Unicode character, else it
+            //   is optimised to skip this condition and try directly the 1-code-unit Unicode character
+            // TODO This relates to "input Unicode" - see prepare-unicode-classes.js
             return buildSequence(
                 context.reportFailures ? [ op.EXPECT, expectedIndex ] : [],
                 buildCondition(
-                    match,
-                    [ op.MATCH_CLASS, classIndex ],
-                    [ op.ACCEPT_N, 1 ],
-                    [ op.PUSH_FAILED ],
+                    options.unicode ? 0 : match2,
+                    [ op.MATCH_ASTRAL ],
+                    opcode2,
+                    opcode1,
                 ),
             );
 
@@ -734,12 +800,20 @@ function generateBytecode( ast, session ) {
                 ? addExpectedConst( { type: "any" } )
                 : null;
 
+            // TODO This relates to "output Unicode" - see prepare-unicode-classes.js
+            const opcodeAccept = buildCondition(
+                options.unicode ? 0 : -1,
+                [ op.MATCH_ASTRAL ],
+                [ op.ACCEPT_N, 2 ],
+                [ op.ACCEPT_N, 1 ],
+            );
+
             return buildSequence(
                 context.reportFailures ? [ op.EXPECT, expectedIndex ] : [],
                 buildCondition(
                     node.match|0,
                     [ op.MATCH_ANY ],
-                    [ op.ACCEPT_N, 1 ],
+                    opcodeAccept,
                     [ op.PUSH_FAILED ],
                 ),
             );

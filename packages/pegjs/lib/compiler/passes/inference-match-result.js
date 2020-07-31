@@ -155,6 +155,8 @@ function inferenceMatchResult( ast, session ) {
             // Empty character class never match on any input
             node.match = node.parts.length === 0 ? -1 : 0;
 
+            if ( node.regexpBMP === true && node.regexpAstral === true ) node.match = 1;
+
             return node.match;
 
         },

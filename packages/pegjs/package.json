@@ -23,5 +23,8 @@
     "bin": "bin/peg.js",
     "engines": {
         "node": ">= 8"
+    },
+    "dependencies": {
+        "regenerate": "^1.4.1"
     }
 }

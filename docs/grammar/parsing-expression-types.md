@@ -23,7 +23,7 @@ There are several types of parsing expressions, some of them containing subexpre
 
 #### "*literal*"<br>'*literal*'
 
-Match exact literal string and return it. The string syntax is the same as in JavaScript.
+Match exact literal string and return it. The string syntax is the same as in JavaScript, including `\u{hhhhhh}` for Unicode characters above the Basic Multilingual Plane (BMP).
 
 Appending `i` right after the literal makes the match case-insensitive.
 
@@ -31,13 +31,17 @@ Appending `i` right after the literal makes the match case-insensitive.
 
 Match exactly one character and return it as a string.
 
+Depending on the value of the option `unicode`, this is matches 1 UTF-16 code unit (for value `false`), or 1 Unicode character well-formed in UTF-16 (for value `true`), or 1 well-formed Unicode character or a lone surrogate as a fallback (for value `"lone-surrogates"`).
+
 #### [*characters*]
 
-Match one character from a set and return it as a string. The characters in the list can be escaped in exactly the same way they are escaped in JavaScript strings. The list of characters can also contain ranges (e.g. `[a-f]` means “any character between (and including) _a_ and _f_, all lowercase letters”).
+Match one character from a set and return it as a string. The characters in the list can be escaped in exactly the same way they are escaped in JavaScript strings, including `\u{hhhhhh}` for Unicode characters above the Basic Multilingual Plane (BMP). The list of characters can also contain ranges (e.g. `[a-f]` means “any character between (and including) _a_ and _f_, all lowercase letters”).
 
 Preceding the characters with `^` inverts the matched set (e.g. `[^a-z]` means “all character but lowercase letters”).
 
 Appending `i` right after the right bracket makes the match case-insensitive.
+
+Unicode characters above the Basic Multilingual Plane (BMP) can be specified when the option `unicode` is `true` or `"lone-surrogates"`. Lone UTF-16 surrogates have strict usage rules: they can be used only if the option `unicode` is `"lone-surrogates"`, they cannot be mixed with well-formed Unicode characters in the same class, they cannot be mixed with the other surrogate type in the same class, and they cannot use inverted classes or the `i` flag.
 
 #### *rule*
 
